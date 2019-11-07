@@ -32,7 +32,7 @@ var (
 	outputResources map[string]v1alpha1.PipelineResourceInterface
 )
 
-func outputResourceSetup(t *testing.T) {
+func outputResourceSetup() {
 	logger, _ = logging.NewLogger("", "")
 
 	rs := []*v1alpha1.PipelineResource{{
@@ -93,7 +93,7 @@ func outputResourceSetup(t *testing.T) {
 
 	outputResources = make(map[string]v1alpha1.PipelineResourceInterface)
 	for _, r := range rs {
-		ri, _ := v1alpha1.ResourceFromType(r)
+		ri, _ := v1alpha1.ResourceFromType(r, images)
 		outputResources[r.Name] = ri
 	}
 }
@@ -121,17 +121,21 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Inputs: v1alpha1.TaskRunInputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 					}},
 				},
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 						Paths: []string{"pipeline-task-name"},
 					}},
@@ -161,24 +165,21 @@ func TestValidOutputResources(t *testing.T) {
 			},
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-mssqb",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/source-workspace"},
+			Name:    "create-dir-source-workspace-9l9zj",
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}, {Container: corev1.Container{
-			Name:    "source-mkdir-source-git-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p pipeline-task-name"},
+			Name:    "source-mkdir-source-git-mz4c7",
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "pipeline-task-name"},
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      "pipelinerun-pvc",
 				MountPath: "/pvc",
 			}},
 		}}, {Container: corev1.Container{
-			Name:    "source-copy-source-git-mz4c7",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "cp -r /workspace/source-workspace/. pipeline-task-name"},
+			Name:    "source-copy-source-git-mssqb",
+			Image:   "busybox",
+			Command: []string{"cp", "-r", "/workspace/output/source-workspace/.", "pipeline-task-name"},
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      "pipelinerun-pvc",
 				MountPath: "/pvc",
@@ -199,9 +200,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 						Paths: []string{"pipeline-task-name"},
 					}},
@@ -224,24 +227,21 @@ func TestValidOutputResources(t *testing.T) {
 			},
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-mssqb",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
+			Name:    "create-dir-source-workspace-9l9zj",
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}, {Container: corev1.Container{
-			Name:    "source-mkdir-source-git-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p pipeline-task-name"},
+			Name:    "source-mkdir-source-git-mz4c7",
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "pipeline-task-name"},
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      "pipelinerun-pvc",
 				MountPath: "/pvc",
 			}},
 		}}, {Container: corev1.Container{
-			Name:    "source-copy-source-git-mz4c7",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "cp -r /workspace/output/source-workspace/. pipeline-task-name"},
+			Name:    "source-copy-source-git-mssqb",
+			Image:   "busybox",
+			Command: []string{"cp", "-r", "/workspace/output/source-workspace/.", "pipeline-task-name"},
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      "pipelinerun-pvc",
 				MountPath: "/pvc",
@@ -262,9 +262,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-image",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-image",
+							},
 						},
 						Paths: []string{"pipeline-task-name"},
 					}},
@@ -288,9 +290,8 @@ func TestValidOutputResources(t *testing.T) {
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
 			Name:    "create-dir-source-workspace-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}},
 		wantVolumes: nil,
 	}, {
@@ -304,9 +305,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 					}},
 				},
@@ -329,9 +332,8 @@ func TestValidOutputResources(t *testing.T) {
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
 			Name:    "create-dir-source-workspace-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}},
 	}, {
 		name: "storage resource as both input and output",
@@ -348,17 +350,21 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Inputs: v1alpha1.TaskRunInputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-gcs",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-gcs",
+							},
 						},
 					}},
 				},
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-gcs",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-gcs",
+							},
 						},
 						Paths: []string{"pipeline-task-path"},
 					}},
@@ -388,36 +394,39 @@ func TestValidOutputResources(t *testing.T) {
 				},
 			},
 		},
-		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-78c5n",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/faraway-disk"},
-		}}, {Container: corev1.Container{
-			Name:  "upload-source-gcs-9l9zj",
-			Image: "override-with-gsutil-image:latest",
-			VolumeMounts: []corev1.VolumeMount{{
-				Name:      "volume-source-gcs-sname",
-				MountPath: "/var/secret/sname",
+		wantSteps: []v1alpha1.Step{
+			{Container: corev1.Container{
+				Name:    "create-dir-source-workspace-9l9zj",
+				Image:   "busybox",
+				Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 			}},
-			Command: []string{"/ko-app/gsutil"},
-			Args:    []string{"-args", "rsync -d -r /workspace/faraway-disk gs://some-bucket"},
-			Env: []corev1.EnvVar{{
-				Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+			{Container: corev1.Container{
+				Name:         "source-mkdir-source-gcs-mz4c7",
+				Image:        "busybox",
+				Command:      []string{"mkdir", "-p", "pipeline-task-path"},
+				VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-parent-pvc", MountPath: "/pvc"}},
 			}},
-		}}, {Container: corev1.Container{
-			Name:         "source-mkdir-source-gcs-mz4c7",
-			Image:        "override-with-bash-noop:latest",
-			Command:      []string{"/ko-app/bash"},
-			Args:         []string{"-args", "mkdir -p pipeline-task-path"},
-			VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-parent-pvc", MountPath: "/pvc"}},
-		}}, {Container: corev1.Container{
-			Name:         "source-copy-source-gcs-mssqb",
-			Image:        "override-with-bash-noop:latest",
-			Command:      []string{"/ko-app/bash"},
-			Args:         []string{"-args", "cp -r /workspace/faraway-disk/. pipeline-task-path"},
-			VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-parent-pvc", MountPath: "/pvc"}},
-		}}},
+			{Container: corev1.Container{
+				Name:         "source-copy-source-gcs-mssqb",
+				Image:        "busybox",
+				Command:      []string{"cp", "-r", "/workspace/output/source-workspace/.", "pipeline-task-path"},
+				VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-parent-pvc", MountPath: "/pvc"}},
+			}},
+			{Container: corev1.Container{
+				Name:  "upload-source-gcs-78c5n",
+				Image: "google/cloud-sdk",
+				VolumeMounts: []corev1.VolumeMount{{
+					Name:      "volume-source-gcs-sname",
+					MountPath: "/var/secret/sname",
+				}},
+				Command: []string{"gsutil"},
+				Args:    []string{"rsync", "-d", "-r", "/workspace/output/source-workspace", "gs://some-bucket"},
+				Env: []corev1.EnvVar{{
+					Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+				}},
+			}},
+		},
+
 		wantVolumes: []corev1.Volume{{
 			Name: "volume-source-gcs-sname",
 			VolumeSource: corev1.VolumeSource{
@@ -439,9 +448,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-gcs",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-gcs",
+							},
 						},
 						Paths: []string{"pipeline-task-path"},
 					}},
@@ -463,35 +474,37 @@ func TestValidOutputResources(t *testing.T) {
 				},
 			},
 		},
-		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-78c5n",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
-		}}, {Container: corev1.Container{
-			Name:  "upload-source-gcs-9l9zj",
-			Image: "override-with-gsutil-image:latest",
-			VolumeMounts: []corev1.VolumeMount{{
-				Name: "volume-source-gcs-sname", MountPath: "/var/secret/sname",
+		wantSteps: []v1alpha1.Step{
+			{Container: corev1.Container{
+				Name:    "create-dir-source-workspace-9l9zj",
+				Image:   "busybox",
+				Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 			}},
-			Env: []corev1.EnvVar{{
-				Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+			{Container: corev1.Container{
+				Name:         "source-mkdir-source-gcs-mz4c7",
+				Image:        "busybox",
+				Command:      []string{"mkdir", "-p", "pipeline-task-path"},
+				VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-pvc", MountPath: "/pvc"}},
 			}},
-			Command: []string{"/ko-app/gsutil"},
-			Args:    []string{"-args", "rsync -d -r /workspace/output/source-workspace gs://some-bucket"},
-		}}, {Container: corev1.Container{
-			Name:         "source-mkdir-source-gcs-mz4c7",
-			Image:        "override-with-bash-noop:latest",
-			Command:      []string{"/ko-app/bash"},
-			Args:         []string{"-args", "mkdir -p pipeline-task-path"},
-			VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-pvc", MountPath: "/pvc"}},
-		}}, {Container: corev1.Container{
-			Name:         "source-copy-source-gcs-mssqb",
-			Image:        "override-with-bash-noop:latest",
-			Command:      []string{"/ko-app/bash"},
-			Args:         []string{"-args", "cp -r /workspace/output/source-workspace/. pipeline-task-path"},
-			VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-pvc", MountPath: "/pvc"}},
-		}}},
+			{Container: corev1.Container{
+				Name:         "source-copy-source-gcs-mssqb",
+				Image:        "busybox",
+				Command:      []string{"cp", "-r", "/workspace/output/source-workspace/.", "pipeline-task-path"},
+				VolumeMounts: []corev1.VolumeMount{{Name: "pipelinerun-pvc", MountPath: "/pvc"}},
+			}},
+			{Container: corev1.Container{
+				Name:  "upload-source-gcs-78c5n",
+				Image: "google/cloud-sdk",
+				VolumeMounts: []corev1.VolumeMount{{
+					Name: "volume-source-gcs-sname", MountPath: "/var/secret/sname",
+				}},
+				Env: []corev1.EnvVar{{
+					Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+				}},
+				Command: []string{"gsutil"},
+				Args:    []string{"rsync", "-d", "-r", "/workspace/output/source-workspace", "gs://some-bucket"},
+			}},
+		},
 		wantVolumes: []corev1.Volume{{
 			Name: "volume-source-gcs-sname",
 			VolumeSource: corev1.VolumeSource{
@@ -509,9 +522,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-gcs",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-gcs",
+							},
 						},
 						Paths: []string{"pipeline-task-path"},
 					}},
@@ -533,23 +548,25 @@ func TestValidOutputResources(t *testing.T) {
 				},
 			},
 		},
-		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-mz4c7",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
-		}}, {Container: corev1.Container{
-			Name:  "upload-source-gcs-9l9zj",
-			Image: "override-with-gsutil-image:latest",
-			VolumeMounts: []corev1.VolumeMount{{
-				Name: "volume-source-gcs-sname", MountPath: "/var/secret/sname",
+		wantSteps: []v1alpha1.Step{
+			{Container: corev1.Container{
+				Name:    "create-dir-source-workspace-9l9zj",
+				Image:   "busybox",
+				Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 			}},
-			Env: []corev1.EnvVar{{
-				Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+			{Container: corev1.Container{
+				Name:  "upload-source-gcs-mz4c7",
+				Image: "google/cloud-sdk",
+				VolumeMounts: []corev1.VolumeMount{{
+					Name: "volume-source-gcs-sname", MountPath: "/var/secret/sname",
+				}},
+				Env: []corev1.EnvVar{{
+					Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+				}},
+				Command: []string{"gsutil"},
+				Args:    []string{"rsync", "-d", "-r", "/workspace/output/source-workspace", "gs://some-bucket"},
 			}},
-			Command: []string{"/ko-app/gsutil"},
-			Args:    []string{"-args", "rsync -d -r /workspace/output/source-workspace gs://some-bucket"},
-		}}},
+		},
 		wantVolumes: []corev1.Volume{{
 			Name: "volume-source-gcs-sname",
 			VolumeSource: corev1.VolumeSource{
@@ -567,9 +584,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-gcs",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-gcs",
+							},
 						},
 					}},
 				},
@@ -590,23 +609,25 @@ func TestValidOutputResources(t *testing.T) {
 				},
 			},
 		},
-		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-mz4c7",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
-		}}, {Container: corev1.Container{
-			Name:  "upload-source-gcs-9l9zj",
-			Image: "override-with-gsutil-image:latest",
-			VolumeMounts: []corev1.VolumeMount{{
-				Name: "volume-source-gcs-sname", MountPath: "/var/secret/sname",
+		wantSteps: []v1alpha1.Step{
+			{Container: corev1.Container{
+				Name:    "create-dir-source-workspace-9l9zj",
+				Image:   "busybox",
+				Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 			}},
-			Env: []corev1.EnvVar{{
-				Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+			{Container: corev1.Container{
+				Name:  "upload-source-gcs-mz4c7",
+				Image: "google/cloud-sdk",
+				VolumeMounts: []corev1.VolumeMount{{
+					Name: "volume-source-gcs-sname", MountPath: "/var/secret/sname",
+				}},
+				Env: []corev1.EnvVar{{
+					Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/secret/sname/key.json",
+				}},
+				Command: []string{"gsutil"},
+				Args:    []string{"rsync", "-d", "-r", "/workspace/output/source-workspace", "gs://some-bucket"},
 			}},
-			Command: []string{"/ko-app/gsutil"},
-			Args:    []string{"-args", "rsync -d -r /workspace/output/source-workspace gs://some-bucket"},
-		}}},
+		},
 		wantVolumes: []corev1.Volume{{
 			Name: "volume-source-gcs-sname",
 			VolumeSource: corev1.VolumeSource{
@@ -628,9 +649,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-image",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-image",
+							},
 						},
 					}},
 				},
@@ -653,9 +676,8 @@ func TestValidOutputResources(t *testing.T) {
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
 			Name:    "create-dir-source-workspace-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}},
 	}, {
 		name: "Resource with TargetPath as output",
@@ -672,9 +694,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-image",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-image",
+							},
 						},
 					}},
 				},
@@ -698,9 +722,8 @@ func TestValidOutputResources(t *testing.T) {
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
 			Name:    "create-dir-source-workspace-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace"},
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace"},
 		}}},
 	}, {
 		desc: "image output resource with no steps",
@@ -712,9 +735,11 @@ func TestValidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-image",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-image",
+							},
 						},
 					}},
 				},
@@ -737,23 +762,22 @@ func TestValidOutputResources(t *testing.T) {
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
 			Name:    "create-dir-source-workspace-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}},
 	}} {
 		t.Run(c.name, func(t *testing.T) {
 			names.TestingSeed()
-			outputResourceSetup(t)
+			outputResourceSetup()
 			fakekubeclient := fakek8s.NewSimpleClientset()
-			got, err := AddOutputResources(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, resolveOutputResources(c.taskRun), logger)
+			got, err := AddOutputResources(fakekubeclient, images, c.task.Name, &c.task.Spec, c.taskRun, resolveOutputResources(c.taskRun), logger)
 			if err != nil {
 				t.Fatalf("Failed to declare output resources for test name %q ; test description %q: error %v", c.name, c.desc, err)
 			}
 
 			if got != nil {
-				if d := cmp.Diff(got.Steps, c.wantSteps); d != "" {
-					t.Fatalf("post build steps mismatch: %s", d)
+				if d := cmp.Diff(c.wantSteps, got.Steps); d != "" {
+					t.Fatalf("post build steps mismatch (-want, +got): %s", d)
 				}
 
 				if c.taskRun.GetPipelineRunPVCName() != "" {
@@ -769,8 +793,8 @@ func TestValidOutputResources(t *testing.T) {
 						},
 					)
 				}
-				if d := cmp.Diff(got.Volumes, c.wantVolumes); d != "" {
-					t.Fatalf("post build steps volumes mismatch: %s", d)
+				if d := cmp.Diff(c.wantVolumes, got.Volumes); d != "" {
+					t.Fatalf("post build steps volumes mismatch (-want, +got): %s", d)
 				}
 			}
 		})
@@ -799,17 +823,21 @@ func TestValidOutputResourcesWithBucketStorage(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Inputs: v1alpha1.TaskRunInputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 					}},
 				},
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 						Paths: []string{"pipeline-task-name"},
 					}},
@@ -839,15 +867,14 @@ func TestValidOutputResourcesWithBucketStorage(t *testing.T) {
 			},
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-mz4c7",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/source-workspace"},
+			Name:    "create-dir-source-workspace-9l9zj",
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}, {Container: corev1.Container{
-			Name:    "artifact-copy-to-source-git-9l9zj",
-			Image:   "override-with-gsutil-image:latest",
-			Command: []string{"/ko-app/gsutil"},
-			Args:    []string{"-args", "cp -P -r /workspace/source-workspace gs://fake-bucket/pipeline-task-name"},
+			Name:    "artifact-copy-to-source-git-mz4c7",
+			Image:   "google/cloud-sdk",
+			Command: []string{"gsutil"},
+			Args:    []string{"cp", "-P", "-r", "/workspace/output/source-workspace", "gs://fake-bucket/pipeline-task-name"},
 		}}},
 	}, {
 		name: "git resource in output only with bucket storage",
@@ -864,9 +891,11 @@ func TestValidOutputResourcesWithBucketStorage(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 						Paths: []string{"pipeline-task-name"},
 					}},
@@ -889,15 +918,14 @@ func TestValidOutputResourcesWithBucketStorage(t *testing.T) {
 			},
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
-			Name:    "create-dir-source-workspace-mz4c7",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
+			Name:    "create-dir-source-workspace-9l9zj",
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}, {Container: corev1.Container{
-			Name:    "artifact-copy-to-source-git-9l9zj",
-			Image:   "override-with-gsutil-image:latest",
-			Command: []string{"/ko-app/gsutil"},
-			Args:    []string{"-args", "cp -P -r /workspace/output/source-workspace gs://fake-bucket/pipeline-task-name"},
+			Name:    "artifact-copy-to-source-git-mz4c7",
+			Image:   "google/cloud-sdk",
+			Command: []string{"gsutil"},
+			Args:    []string{"cp", "-P", "-r", "/workspace/output/source-workspace", "gs://fake-bucket/pipeline-task-name"},
 		}}},
 	}, {
 		name: "git resource in output",
@@ -910,9 +938,11 @@ func TestValidOutputResourcesWithBucketStorage(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-git",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-git",
+							},
 						},
 					}},
 				},
@@ -935,13 +965,12 @@ func TestValidOutputResourcesWithBucketStorage(t *testing.T) {
 		},
 		wantSteps: []v1alpha1.Step{{Container: corev1.Container{
 			Name:    "create-dir-source-workspace-9l9zj",
-			Image:   "override-with-bash-noop:latest",
-			Command: []string{"/ko-app/bash"},
-			Args:    []string{"-args", "mkdir -p /workspace/output/source-workspace"},
+			Image:   "busybox",
+			Command: []string{"mkdir", "-p", "/workspace/output/source-workspace"},
 		}}},
 	}} {
 		t.Run(c.name, func(t *testing.T) {
-			outputResourceSetup(t)
+			outputResourceSetup()
 			names.TestingSeed()
 			fakekubeclient := fakek8s.NewSimpleClientset(
 				&corev1.ConfigMap{
@@ -954,13 +983,13 @@ func TestValidOutputResourcesWithBucketStorage(t *testing.T) {
 					},
 				},
 			)
-			got, err := AddOutputResources(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, resolveOutputResources(c.taskRun), logger)
+			got, err := AddOutputResources(fakekubeclient, images, c.task.Name, &c.task.Spec, c.taskRun, resolveOutputResources(c.taskRun), logger)
 			if err != nil {
 				t.Fatalf("Failed to declare output resources for test name %q ; test description %q: error %v", c.name, c.desc, err)
 			}
 			if got != nil {
-				if d := cmp.Diff(got.Steps, c.wantSteps); d != "" {
-					t.Fatalf("post build steps mismatch: %s", d)
+				if d := cmp.Diff(c.wantSteps, got.Steps); d != "" {
+					t.Fatalf("post build steps mismatch (-want, got): %s", d)
 				}
 			}
 		})
@@ -1022,9 +1051,11 @@ func TestInvalidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "source-gcs",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "source-gcs",
+							},
 						},
 						Paths: []string{"test-path"},
 					}},
@@ -1070,9 +1101,11 @@ func TestInvalidOutputResources(t *testing.T) {
 			Spec: v1alpha1.TaskRunSpec{
 				Outputs: v1alpha1.TaskRunOutputs{
 					Resources: []v1alpha1.TaskResourceBinding{{
-						Name: "source-workspace",
-						ResourceRef: v1alpha1.PipelineResourceRef{
-							Name: "invalid-source-storage",
+						PipelineResourceBinding: v1alpha1.PipelineResourceBinding{
+							Name: "source-workspace",
+							ResourceRef: &v1alpha1.PipelineResourceRef{
+								Name: "invalid-source-storage",
+							},
 						},
 					}},
 				},
@@ -1096,9 +1129,9 @@ func TestInvalidOutputResources(t *testing.T) {
 		wantErr: true,
 	}} {
 		t.Run(c.desc, func(t *testing.T) {
-			outputResourceSetup(t)
+			outputResourceSetup()
 			fakekubeclient := fakek8s.NewSimpleClientset()
-			_, err := AddOutputResources(fakekubeclient, c.task.Name, &c.task.Spec, c.taskRun, resolveOutputResources(c.taskRun), logger)
+			_, err := AddOutputResources(fakekubeclient, images, c.task.Name, &c.task.Spec, c.taskRun, resolveOutputResources(c.taskRun), logger)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("Test AddOutputResourceSteps %v : error%v", c.desc, err)
 			}
@@ -1119,7 +1152,7 @@ func resolveOutputResources(taskRun *v1alpha1.TaskRun) map[string]v1alpha1.Pipel
 					Name: r.Name,
 				},
 				Spec: *r.ResourceSpec,
-			})
+			}, images)
 			resolved[r.Name] = i
 		}
 	}

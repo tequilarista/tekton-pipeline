@@ -34,7 +34,7 @@ func TestPullRequest_NewResource(t *testing.T) {
 		tb.PipelineResourceSpecParam("url", url),
 		tb.PipelineResourceSpecSecretParam("githubToken", "test-secret-key", "test-secret-name"),
 	))
-	got, err := v1alpha1.NewPullRequestResource(pr)
+	got, err := v1alpha1.NewPullRequestResource("override-with-pr:latest", pr)
 	if err != nil {
 		t.Fatalf("Error creating storage resource: %s", err.Error())
 	}
@@ -44,6 +44,7 @@ func TestPullRequest_NewResource(t *testing.T) {
 		Type:    v1alpha1.PipelineResourceTypePullRequest,
 		URL:     url,
 		Secrets: pr.Spec.SecretParams,
+		PRImage: "override-with-pr:latest",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Error(diff)
@@ -52,7 +53,7 @@ func TestPullRequest_NewResource(t *testing.T) {
 
 func TestPullRequest_NewResource_error(t *testing.T) {
 	pr := tb.PipelineResource("foo", "default", tb.PipelineResourceSpec(v1alpha1.PipelineResourceTypeGit))
-	if _, err := v1alpha1.NewPullRequestResource(pr); err == nil {
+	if _, err := v1alpha1.NewPullRequestResource("override-with-pr:latest", pr); err == nil {
 		t.Error("NewPullRequestResource() want error, got nil")
 	}
 }
@@ -67,8 +68,9 @@ const workspace = "/workspace"
 func containerTestCases(mode string) []testcase {
 	return []testcase{{
 		in: &v1alpha1.PullRequestResource{
-			Name: "nocreds",
-			URL:  "https://example.com",
+			Name:    "nocreds",
+			URL:     "https://example.com",
+			PRImage: "override-with-pr:latest",
 		},
 		out: []v1alpha1.Step{{Container: corev1.Container{
 			Name:       "pr-source-nocreds-9l9zj",
@@ -87,6 +89,7 @@ func containerTestCases(mode string) []testcase {
 				SecretName: "github-creds",
 				SecretKey:  "token",
 			}},
+			PRImage: "override-with-pr:latest",
 		},
 		out: []v1alpha1.Step{{Container: corev1.Container{
 			Name:       "pr-source-creds-mz4c7",
@@ -114,27 +117,29 @@ func TestPullRequest_GetDownloadSteps(t *testing.T) {
 
 	for _, tc := range containerTestCases("download") {
 		t.Run(tc.in.GetName(), func(t *testing.T) {
-			got, err := tc.in.GetDownloadSteps(workspace)
+			ts := v1alpha1.TaskSpec{}
+			got, err := tc.in.GetInputTaskModifier(&ts, workspace)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(tc.out, got); diff != "" {
+			if diff := cmp.Diff(tc.out, got.GetStepsToPrepend()); diff != "" {
 				t.Error(diff)
 			}
 		})
 	}
 }
 
-func TestPullRequest_GetUploadSteps(t *testing.T) {
+func TestPullRequest_GetOutputSteps(t *testing.T) {
 	names.TestingSeed()
 
 	for _, tc := range containerTestCases("upload") {
 		t.Run(tc.in.GetName(), func(t *testing.T) {
-			got, err := tc.in.GetUploadSteps(workspace)
+			ts := v1alpha1.TaskSpec{}
+			got, err := tc.in.GetOutputTaskModifier(&ts, workspace)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(tc.out, got); diff != "" {
+			if diff := cmp.Diff(tc.out, got.GetStepsToAppend()); diff != "" {
 				t.Error(diff)
 			}
 		})

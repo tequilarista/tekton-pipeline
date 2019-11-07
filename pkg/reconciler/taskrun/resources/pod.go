@@ -21,7 +21,6 @@ package resources
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -47,6 +46,12 @@ import (
 const (
 	workspaceDir = "/workspace"
 	homeDir      = "/builder/home"
+
+	taskRunLabelKey     = pipeline.GroupName + pipeline.TaskRunLabelKey
+	ManagedByLabelKey   = "app.kubernetes.io/managed-by"
+	ManagedByLabelValue = "tekton-pipelines"
+
+	scriptsDir = "/builder/scripts"
 )
 
 // These are effectively const, but Go doesn't have such an annotation.
@@ -84,6 +89,17 @@ var (
 	// Random byte reader used for pod name generation.
 	// var for testing.
 	randReader = rand.Reader
+
+	// Volume definition attached to Pods generated from TaskRuns that have
+	// steps that specify a Script.
+	scriptsVolume = corev1.Volume{
+		Name:         "place-scripts",
+		VolumeSource: emptyVolumeSource,
+	}
+	scriptsVolumeMount = corev1.VolumeMount{
+		Name:      "place-scripts",
+		MountPath: scriptsDir,
+	}
 )
 
 const (
@@ -96,15 +112,10 @@ const (
 	workingDirInit       = "working-dir-initializer"
 	ReadyAnnotation      = "tekton.dev/ready"
 	readyAnnotationValue = "READY"
+	sidecarPrefix        = "sidecar-"
 )
 
-var (
-	// The container used to initialize credentials before the build runs.
-	credsImage = flag.String("creds-image", "override-with-creds:latest",
-		"The container image for preparing our Build's credentials.")
-)
-
-func makeCredentialInitializer(serviceAccountName, namespace string, kubeclient kubernetes.Interface) (*v1alpha1.Step, []corev1.Volume, error) {
+func makeCredentialInitializer(credsImage, serviceAccountName, namespace string, kubeclient kubernetes.Interface) (*v1alpha1.Step, []corev1.Volume, error) {
 	if serviceAccountName == "" {
 		serviceAccountName = "default"
 	}
@@ -153,7 +164,7 @@ func makeCredentialInitializer(serviceAccountName, namespace string, kubeclient 
 
 	return &v1alpha1.Step{Container: corev1.Container{
 		Name:         names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(containerPrefix + credsInit),
-		Image:        *credsImage,
+		Image:        credsImage,
 		Command:      []string{"/ko-app/creds-init"},
 		Args:         args,
 		VolumeMounts: volumeMounts,
@@ -187,7 +198,7 @@ func makeWorkingDirScript(workingDirs map[string]bool) string {
 	return script
 }
 
-func makeWorkingDirInitializer(steps []v1alpha1.Step) *v1alpha1.Step {
+func makeWorkingDirInitializer(shellImage string, steps []v1alpha1.Step) *v1alpha1.Step {
 	workingDirs := make(map[string]bool)
 	for _, step := range steps {
 		workingDirs[step.WorkingDir] = true
@@ -196,35 +207,15 @@ func makeWorkingDirInitializer(steps []v1alpha1.Step) *v1alpha1.Step {
 	if script := makeWorkingDirScript(workingDirs); script != "" {
 		return &v1alpha1.Step{Container: corev1.Container{
 			Name:         names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(containerPrefix + workingDirInit),
-			Image:        *v1alpha1.BashNoopImage,
-			Command:      []string{"/ko-app/bash"},
-			Args:         []string{"-args", script},
+			Image:        shellImage,
+			Command:      []string{"sh"},
+			Args:         []string{"-c", script},
 			VolumeMounts: implicitVolumeMounts,
 			Env:          implicitEnvVars,
 			WorkingDir:   workspaceDir,
 		}}
 	}
 	return nil
-}
-
-// initOutputResourcesDefaultDir checks if there are any output image resources expecting a default path
-// and creates an init container to create that folder
-func initOutputResourcesDefaultDir(taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec) []v1alpha1.Step {
-	var makeDirSteps []v1alpha1.Step
-	if len(taskRun.Spec.Outputs.Resources) > 0 {
-		for _, r := range taskRun.Spec.Outputs.Resources {
-			for _, o := range taskSpec.Outputs.Resources {
-				if o.Name == r.Name {
-					if strings.HasPrefix(o.OutputImageDir, v1alpha1.TaskOutputImageDefaultDir) {
-						s := v1alpha1.CreateDirStep("default-image-output", fmt.Sprintf("%s/%s", v1alpha1.TaskOutputImageDefaultDir, r.Name))
-						s.VolumeMounts = append(s.VolumeMounts, implicitVolumeMounts...)
-						makeDirSteps = append(makeDirSteps, s)
-					}
-				}
-			}
-		}
-	}
-	return makeDirSteps
 }
 
 // GetPod returns the Pod for the given pod name
@@ -246,21 +237,29 @@ func TryGetPod(taskRunStatus v1alpha1.TaskRunStatus, gp GetPod) (*corev1.Pod, er
 
 // MakePod converts TaskRun and TaskSpec objects to a Pod which implements the taskrun specified
 // by the supplied CRD.
-func MakePod(taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec, kubeclient kubernetes.Interface) (*corev1.Pod, error) {
-	cred, secrets, err := makeCredentialInitializer(taskRun.Spec.ServiceAccount, taskRun.Namespace, kubeclient)
+func MakePod(images pipeline.Images, taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec, kubeclient kubernetes.Interface) (*corev1.Pod, error) {
+	cred, secrets, err := makeCredentialInitializer(images.CredsImage, taskRun.GetServiceAccountName(), taskRun.Namespace, kubeclient)
 	if err != nil {
 		return nil, err
 	}
 	initSteps := []v1alpha1.Step{*cred}
 	var podSteps []v1alpha1.Step
 
-	if workingDir := makeWorkingDirInitializer(taskSpec.Steps); workingDir != nil {
+	if workingDir := makeWorkingDirInitializer(images.ShellImage, taskSpec.Steps); workingDir != nil {
 		initSteps = append(initSteps, *workingDir)
 	}
 
-	initSteps = append(initSteps, initOutputResourcesDefaultDir(taskRun, taskSpec)...)
-
 	maxIndicesByResource := findMaxResourceRequest(taskSpec.Steps, corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourceEphemeralStorage)
+
+	placeScripts := false
+	placeScriptsStep := v1alpha1.Step{Container: corev1.Container{
+		Name:         names.SimpleNameGenerator.RestrictLengthWithRandomSuffix("place-scripts"),
+		Image:        images.ShellImage,
+		TTY:          true,
+		Command:      []string{"sh"},
+		Args:         []string{"-c", ""},
+		VolumeMounts: []corev1.VolumeMount{scriptsVolumeMount},
+	}}
 
 	for i, s := range taskSpec.Steps {
 		s.Env = append(implicitEnvVars, s.Env...)
@@ -278,6 +277,52 @@ func MakePod(taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec, kubeclient k
 			}
 		}
 
+		// If the step specifies a Script, generate and invoke an
+		// executable script file containing each item in the script.
+		if s.Script != "" {
+			placeScripts = true
+			// Append to the place-scripts script to place the
+			// script file in a known location in the scripts volume.
+			tmpFile := filepath.Join(scriptsDir, names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("script-%d", i)))
+			// heredoc is the "here document" placeholder string
+			// used to cat script contents into the file. Typically
+			// this is the string "EOF" but if this value were
+			// "EOF" it would prevent users from including the
+			// string "EOF" in their own scripts. Instead we
+			// randomly generate a string to (hopefully) prevent
+			// collisions.
+			heredoc := names.SimpleNameGenerator.RestrictLengthWithRandomSuffix("script-heredoc-randomly-generated")
+			// NOTE: quotes around the heredoc string are
+			// important. Without them, ${}s in the file are
+			// interpreted as env vars and likely end up replaced
+			// with empty strings. See
+			// https://stackoverflow.com/a/27921346
+			placeScriptsStep.Args[1] += fmt.Sprintf(`tmpfile="%s"
+touch ${tmpfile} && chmod +x ${tmpfile}
+cat > ${tmpfile} << '%s'
+%s
+%s
+`, tmpFile, heredoc, s.Script, heredoc)
+			// The entrypoint redirecter has already run on this
+			// step, so we just need to replace the image's
+			// entrypoint (if any) with the script to run.
+			// Validation prevents step args from being passed, but
+			// just to be careful we'll replace any that survived
+			// entrypoint redirection here.
+
+			// TODO(jasonhall): It's confusing that entrypoint
+			// redirection isn't done as part of MakePod, and the
+			// interaction of these two modifications to container
+			// args might be confusing to debug in the future.
+			s.Args = append(s.Args, tmpFile)
+			for i := 0; i < len(s.Args); i++ {
+				if s.Args[i] == "-entrypoint" {
+					s.Args = append(s.Args[:i+1], tmpFile)
+				}
+			}
+			s.VolumeMounts = append(s.VolumeMounts, scriptsVolumeMount)
+		}
+
 		if s.WorkingDir == "" {
 			s.WorkingDir = workspaceDir
 		}
@@ -286,7 +331,8 @@ func MakePod(taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec, kubeclient k
 		} else {
 			s.Name = names.SimpleNameGenerator.RestrictLength(fmt.Sprintf("%v%v", containerPrefix, s.Name))
 		}
-		// use the container name to add the entrypoint biary as an init container
+		// use the container name to add the entrypoint binary as an
+		// init container.
 		if s.Name == names.SimpleNameGenerator.RestrictLength(fmt.Sprintf("%v%v", containerPrefix, entrypoint.InitContainerName)) {
 			initSteps = append(initSteps, s)
 		} else {
@@ -294,12 +340,21 @@ func MakePod(taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec, kubeclient k
 			podSteps = append(podSteps, s)
 		}
 	}
+
 	// Add podTemplate Volumes to the explicitly declared use volumes
 	volumes := append(taskSpec.Volumes, taskRun.Spec.PodTemplate.Volumes...)
 	// Add our implicit volumes and any volumes needed for secrets to the explicitly
 	// declared user volumes.
 	volumes = append(volumes, implicitVolumes...)
 	volumes = append(volumes, secrets...)
+
+	// Add the volume shared to place a script file, if any step specified
+	// a script.
+	if placeScripts {
+		volumes = append(volumes, scriptsVolume)
+		initSteps = append(initSteps, placeScriptsStep)
+	}
+
 	if err := v1alpha1.ValidateVolumes(volumes); err != nil {
 		return nil, err
 	}
@@ -327,11 +382,10 @@ func MakePod(taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec, kubeclient k
 	for _, s := range mergedPodSteps {
 		mergedPodContainers = append(mergedPodContainers, s.Container)
 	}
-	if len(taskSpec.Sidecars) > 0 {
-		mergedPodContainers = append(mergedPodContainers, taskSpec.Sidecars...)
+	for _, sc := range taskSpec.Sidecars {
+		sc.Name = names.SimpleNameGenerator.RestrictLength(fmt.Sprintf("%v%v", sidecarPrefix, sc.Name))
+		mergedPodContainers = append(mergedPodContainers, sc)
 	}
-
-	podTemplate := v1alpha1.CombinedPodTemplate(taskRun.Spec.PodTemplate, taskRun.Spec.NodeSelector, taskRun.Spec.Tolerations, taskRun.Spec.Affinity)
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -354,12 +408,13 @@ func MakePod(taskRun *v1alpha1.TaskRun, taskSpec v1alpha1.TaskSpec, kubeclient k
 			RestartPolicy:      corev1.RestartPolicyNever,
 			InitContainers:     mergedInitContainers,
 			Containers:         mergedPodContainers,
-			ServiceAccountName: taskRun.Spec.ServiceAccount,
+			ServiceAccountName: taskRun.GetServiceAccountName(),
 			Volumes:            volumes,
-			NodeSelector:       podTemplate.NodeSelector,
-			Tolerations:        podTemplate.Tolerations,
-			Affinity:           podTemplate.Affinity,
-			SecurityContext:    podTemplate.SecurityContext,
+			NodeSelector:       taskRun.Spec.PodTemplate.NodeSelector,
+			Tolerations:        taskRun.Spec.PodTemplate.Tolerations,
+			Affinity:           taskRun.Spec.PodTemplate.Affinity,
+			SecurityContext:    taskRun.Spec.PodTemplate.SecurityContext,
+			RuntimeClassName:   taskRun.Spec.PodTemplate.RuntimeClassName,
 		},
 	}, nil
 }
@@ -386,13 +441,25 @@ func IsContainerStep(name string) bool {
 	return strings.HasPrefix(name, containerPrefix)
 }
 
+func IsContainerSidecar(name string) bool {
+	return strings.HasPrefix(name, sidecarPrefix)
+}
+
 // makeLabels constructs the labels we will propagate from TaskRuns to Pods.
 func makeLabels(s *v1alpha1.TaskRun) map[string]string {
 	labels := make(map[string]string, len(s.ObjectMeta.Labels)+1)
+	// NB: Set this *before* passing through TaskRun labels. If the TaskRun
+	// has a managed-by label, it should override this default.
+
+	// Copy through the TaskRun's labels to the underlying Pod's.
+	labels[ManagedByLabelKey] = ManagedByLabelValue
 	for k, v := range s.ObjectMeta.Labels {
 		labels[k] = v
 	}
-	labels[pipeline.GroupName+pipeline.TaskRunLabelKey] = s.Name
+
+	// NB: Set this *after* passing through TaskRun Labels. If the TaskRun
+	// specifies this label, it should be overridden by this value.
+	labels[taskRunLabelKey] = s.Name
 	return labels
 }
 
@@ -450,4 +517,10 @@ func findMaxResourceRequest(steps []v1alpha1.Step, resourceNames ...corev1.Resou
 // TrimContainerNamePrefix trim the container name prefix to get the corresponding step name
 func TrimContainerNamePrefix(containerName string) string {
 	return strings.TrimPrefix(containerName, containerPrefix)
+}
+
+// TrimSidecarNamePrefix trim the sidecar name prefix to get the corresponding
+// sidecar name
+func TrimSidecarNamePrefix(containerName string) string {
+	return strings.TrimPrefix(containerName, sidecarPrefix)
 }

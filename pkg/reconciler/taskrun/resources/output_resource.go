@@ -19,6 +19,7 @@ package resources
 import (
 	"path/filepath"
 
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/artifacts"
 	"go.uber.org/zap"
@@ -47,10 +48,11 @@ var (
 // upload steps (like upload to blob store )
 //
 // Resource source path determined
-// 1. If resource is declared in inputs then target path from input resource is used to identify source path
+// 1. If resource has a targetpath that is used. Otherwise:
 // 2. If resource is declared in outputs only then the default is /output/resource_name
 func AddOutputResources(
 	kubeclient kubernetes.Interface,
+	images pipeline.Images,
 	taskName string,
 	taskSpec *v1alpha1.TaskSpec,
 	taskRun *v1alpha1.TaskRun,
@@ -65,18 +67,9 @@ func AddOutputResources(
 	taskSpec = taskSpec.DeepCopy()
 
 	pvcName := taskRun.GetPipelineRunPVCName()
-	as, err := artifacts.GetArtifactStorage(pvcName, kubeclient, logger)
+	as, err := artifacts.GetArtifactStorage(images, pvcName, kubeclient, logger)
 	if err != nil {
 		return nil, err
-	}
-
-	// track resources that are present in input of task cuz these resources will be copied onto PVC
-	inputResourceMap := map[string]string{}
-
-	if taskSpec.Inputs != nil {
-		for _, input := range taskSpec.Inputs.Resources {
-			inputResourceMap[input.Name] = destinationPath(input.Name, input.TargetPath)
-		}
 	}
 
 	for _, output := range taskSpec.Outputs.Resources {
@@ -90,45 +83,36 @@ func AddOutputResources(
 			return nil, xerrors.Errorf("failed to get output pipeline Resource for task %q resource %v", taskName, boundResource)
 		}
 
-		// if resource is declared in input then copy outputs to pvc
-		// To build copy step it needs source path(which is targetpath of input resourcemap) from task input source
-		sourcePath := inputResourceMap[boundResource.Name]
-		if sourcePath != "" {
-			logger.Warn(`This task uses the same resource as an input and output. The behavior of this will change in a future release.
-		See https://github.com/tektoncd/pipeline/issues/1118 for more information.`)
+		var sourcePath string
+		if output.TargetPath == "" {
+			sourcePath = filepath.Join(outputDir, boundResource.Name)
 		} else {
-			if output.TargetPath == "" {
-				sourcePath = filepath.Join(outputDir, boundResource.Name)
-			} else {
-				sourcePath = output.TargetPath
-			}
+			sourcePath = output.TargetPath
 		}
 
-		resourceSteps, err := resource.GetUploadSteps(sourcePath)
-		if err != nil {
-			return nil, xerrors.Errorf("task %q invalid upload spec: %q; error %w", taskName, boundResource.ResourceRef.Name, err)
-		}
-
-		resourceVolumes, err := resource.GetUploadVolumeSpec(taskSpec)
-		if err != nil {
-			return nil, xerrors.Errorf("task %q invalid upload spec: %q; error %w", taskName, boundResource.ResourceRef.Name, err)
-		}
+		// Add containers to mkdir each output directory. This should run before the build steps themselves.
+		mkdirSteps := []v1alpha1.Step{v1alpha1.CreateDirStep(images.ShellImage, boundResource.Name, sourcePath)}
+		taskSpec.Steps = append(mkdirSteps, taskSpec.Steps...)
 
 		if allowedOutputResources[resource.GetType()] && taskRun.HasPipelineRunOwnerReference() {
 			var newSteps []v1alpha1.Step
 			for _, dPath := range boundResource.Paths {
 				newSteps = append(newSteps, as.GetCopyToStorageFromSteps(resource.GetName(), sourcePath, dPath)...)
 			}
-			resourceSteps = append(resourceSteps, newSteps...)
-			resourceVolumes = append(resourceVolumes, as.GetSecretsVolumes()...)
+			taskSpec.Steps = append(taskSpec.Steps, newSteps...)
+			taskSpec.Volumes = append(taskSpec.Volumes, as.GetSecretsVolumes()...)
 		}
 
-		// Add containers to mkdir each output directory. This should run before the build steps themselves.
-		mkdirSteps := []v1alpha1.Step{v1alpha1.CreateDirStep(boundResource.Name, sourcePath)}
-		taskSpec.Steps = append(mkdirSteps, taskSpec.Steps...)
-		taskSpec.Steps = append(taskSpec.Steps, resourceSteps...)
-		taskSpec.Volumes = append(taskSpec.Volumes, resourceVolumes...)
+		// Allow the resource to mutate the task.
+		modifier, err := resource.GetOutputTaskModifier(taskSpec, sourcePath)
+		if err != nil {
+			return nil, err
+		}
+		if err := v1alpha1.ApplyTaskModifier(taskSpec, modifier); err != nil {
+			return nil, xerrors.Errorf("Unabled to apply Resource %s: %w", boundResource.Name, err)
+		}
 
+		// Attach the PVC that will be used for `from` copying.
 		if as.GetType() == v1alpha1.ArtifactStoragePVCType {
 			if pvcName == "" {
 				return taskSpec, nil

@@ -9,48 +9,225 @@ Tekton Pipelines!
 This directory contains the
 [`Tasks`](https://github.com/tektoncd/pipeline/blob/master/docs/tasks.md) and
 [`Pipelines`](https://github.com/tektoncd/pipeline/blob/master/docs/pipelines.md)
-that we (will) use.
+that we use.
 
-TODO(#538): In #538 or #537 we will update
-[Prow](https://github.com/tektoncd/pipeline/blob/master/CONTRIBUTING.md#pull-request-process)
-to invoke these `Pipelines` automatically, but for now we will have to invoke
-them manually.
+The Pipelines and Tasks in this folder are used for:
 
-## Pull Request Pipeline
+1. [Manually creating official releases from the official cluster](#create-an-official-release)
+1. [Automated nightly releases](#nightly-releases)
 
-The pull request pipeline will use the
+To start from scratch and use these Pipelines and Tasks:
+
+1. [Install Tekton v0.3.1](#install-tekton)
+1. [Setup the Tasks and Pipelines](#setup)
+1. [Create the required service account + secrets](#service-account-and-secrets)
+
+## Create an official release
+
+Official releases are performed from the `dogfooding` cluster
+[in the `tekton-releases` GCP project](https://github.com/tektoncd/plumbing/blob/master/gcp.md).
+This cluster [already has the correct version of Tekton installed](#install-tekton).
+
+To make a new release:
+
+1. (Optionally) [Apply the latest versions of the Tasks + Pipelines](#setup)
+1. (If you haven't already) [Install `tkn`](https://github.com/tektoncd/cli#installing-tkn)
+1. [Run the Pipeline](#run-the-pipeline)
+1. Create the new tag and release in GitHub
+   ([see one of way of doing that here](https://github.com/tektoncd/pipeline/issues/530#issuecomment-477409459)).
+   _TODO(#530): Automate as much of this as possible with Tekton._
+1. Add an entry to [the README](../README.md) at `HEAD` for docs and examples for
+   the new release ([README.md#read-the-docs](../README.md#read-the-docs)).
+1. Update the new release in GitHub with the same links to the docs and examples, see
+   [v0.1.0](https://github.com/tektoncd/pipeline/releases/tag/v0.1.0) for example.
+
+### Run the Pipeline
+
+To use [`tkn`](https://github.com/tektoncd/cli) to run the `publish-tekton-pipelines` `Task` and create a release:
+
+1. Pick the revision you want to release and update the
+   [`resources.yaml`](./resources.yaml) file to add a
+   `PipelineResoruce` for it, e.g.:
+
+   ```yaml
+   apiVersion: tekton.dev/v1alpha1
+   kind: PipelineResource
+   metadata:
+     name: tekton-pipelines-vX-Y-Z
+   spec:
+     type: git
+     params:
+     - name: url
+       value: https://github.com/tektoncd/pipeline
+     - name: revision
+       value: revision-for-vX.Y.Z-invalid-tags-boouuhhh # REPLACE with the commit you'd like to build from (not a tag, since that's not created yet)
+   ```
+
+ 1. To use release post-processing services, update the
+    [`resources.yaml`](./resources.yaml) file to add a valid targetURL in the
+    cloud event `PipelineResoruce` named `post-release-trigger`:
+
+    ```yaml
+    apiVersion: tekton.dev/v1alpha1
+    kind: PipelineResource
+    metadata:
+      name: post-release-trigger
+    spec:
+      type: cloudEvent
+      params:
+        - name: targetURI
+          value: http://el-pipeline-release-post-processing.default.svc.cluster.local:8080 # This has to be changed to a valid URL
+    ```
+
+    The targetURL should point to the event listener configured in the cluster.
+    The example above is configured with the correct value for the  `dogfooding`
+    cluster.
+
+1. To run against your own infrastructure (if you are running
+   [in the production cluster](https://github.com/tektoncd/plumbing#prow) the
+   default account should already have these creds, this is just a bonus - plus
+   `release-right-meow` might already exist in the cluster!), also setup the
+   required credentials for the `release-right-meow` service account, either:
+
+   - For
+     [the GCP service account `release-right-meow@tekton-releases.iam.gserviceaccount.com`](#production-service-account)
+     which has the proper authorization to release the images and yamls in
+     [our `tekton-releases` GCP project](https://github.com/tektoncd/plumbing#prow)
+   - For
+     [your own GCP service account](https://cloud.google.com/iam/docs/creating-managing-service-accounts)
+     if running against your own infrastructure
+
+
+1. [Connect to the production cluster](https://github.com/tektoncd/plumbing#prow):
+
+    ```bash
+    gcloud container clusters get-credentials dogfooding --zone us-central1-a --project tekton-releases
+    ```
+
+1. Run the `release-pipeline` (assuming you are using the production cluster and
+   [all the Tasks and Pipelines already exist](#setup)):
+
+   ```shell
+   # Create the resoruces - i.e. set the revision that you wan to build from
+   kubectl apply -f tekton/resources.yaml
+
+   # Change the environment variable to the version you would like to use.
+   # Be careful: due to #983 it is possible to overwrite previous releases.
+   export VERSION_TAG=v0.X.Y
+   export IMAGE_REGISTRY=gcr.io/tekton-releases
+
+   # Double-check the git revision that is going to be used for the release:
+   kubectl get pipelineresource/tekton-pipelines-git -o=jsonpath="{'Target Revision: '}{.spec.params[?(@.name == 'revision')].value}{'\n'}"
+
+   tkn pipeline start \
+		--param=versionTag=${VERSION_TAG} \
+		--param=imageRegistry=${IMAGE_REGISTRY} \
+		--serviceaccount=release-right-meow \
+		--resource=source-repo=tekton-pipelines-git \
+		--resource=bucket=tekton-bucket \
+		--resource=builtBaseImage=base-image \
+		--resource=builtEntrypointImage=entrypoint-image \
+		--resource=builtKubeconfigWriterImage=kubeconfigwriter-image \
+		--resource=builtCredsInitImage=creds-init-image \
+		--resource=builtGitInitImage=git-init-image \
+		--resource=builtNopImage=nop-image \
+		--resource=builtControllerImage=controller-image \
+		--resource=builtWebhookImage=webhook-image \
+		--resource=builtDigestExporterImage=digest-exporter-image \
+		--resource=builtPullRequestInitImage=pull-request-init-image \
+		--resource=builtGcsFetcherImage=gcs-fetcher-image \
+		--resource=notification=post-release-trigger
+		pipeline-release
+   ```
+
+_TODO(#569): Normally we'd use the image `PipelineResources` to control which
+image registry the images are pushed to. However since we have so many images,
+all going to the same registry, we are cheating and using a parameter for the
+image registry instead._
+
+## Nightly releases
+
+[The nightly release pipeline](release-pipeline-nightly.yaml) is
+[triggered nightly by Prow](https://github.com/tektoncd/plumbing/tree/master/prow).
+
+This Pipeline uses:
+
+- [ci-images.yaml](ci-images.yaml)
+- [publish-nightly.yaml](publish-nightly.yaml) (See [triggers#87](https://github.com/tektoncd/triggers/issues/87))
+
+The nightly release Pipeline is currently missing Tasks which we want to add once we are able:
+
+- The unit tests aren't run due to the data race reported in [#1124](http://github.com/tektoncd/pipeline/issues/1124)
+- Linting isn't run due to it being flakey [#1205](http://github.com/tektoncd/pipeline/issues/1205)
+- Build isn't run because it uses `workingDir` which is broken in v0.3.1 ([kubernetes/test-infra#13948](https://github.com/kubernetes/test-infra/issues/13948))
+
+## Install Tekton
+
+Some of the Pipelines and Tasks in this repo work with v0.3.1 due to
+[Prow #13948](https://github.com/kubernetes/test-infra/issues/13948), so that
+they can be used [with Prow](https://github.com/tektoncd/plumbing/tree/master/prow).
+
+Specifically, nightly releases are triggered by Prow, so they are compatible with
+v0.3.1, while full releases are triggered manually and require Tekton >= v0.7.0.
+
+```bash
+# If this is your first time installing Tekton in the cluster you might need to give yourself permission to do so
+kubectl create clusterrolebinding cluster-admin-binding-someusername \
+  --clusterrole=cluster-admin \
+  --user=$(gcloud config get-value core/account)
+
+# For Tekton v0.3.1 - apply version v0.3.1
+kubectl apply --filename  https://storage.googleapis.com/tekton-releases/previous/v0.3.1/release.yaml
+
+# For Tekton v0.7.0 - apply version v0.7.0 - Do not apply both versions in the same cluster!
+kubectl apply --filename  https://storage.googleapis.com/tekton-releases/previous/v0.3.1/release.yaml
+```
+
+## Setup
+
+Add all the `Tasks` to the cluster, including the
 [`golang`](https://github.com/tektoncd/catalog/tree/master/golang)
 Tasks from the
-[`tektoncd/catalog`](https://github.com/tektoncd/catalog). To add them
-to your cluster:
+[`tektoncd/catalog`](https://github.com/tektoncd/catalog), and the
+[release pre-check](https://github.com/tektoncd/plumbing/tree/master/tekton/) Task from
+[`tektoncd/plumbing`](https://github.com/tektoncd/plumbing).
 
+For nightly releases, use a version of the [`tektoncdcatalog`](https://github.com/tektoncd/catalog)
+tasks that is compatible with Tekton v0.3.1:
+
+```bash
+# Apply the Tasks we are using from the catalog
+kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/14d38f2041312b0ad17bc079cfa9c0d66895cc7a/golang/lint.yaml
+kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/14d38f2041312b0ad17bc079cfa9c0d66895cc7a/golang/build.yaml
+kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/14d38f2041312b0ad17bc079cfa9c0d66895cc7a/golang/tests.yaml
 ```
+
+For full releases, use a version of the [`tektoncdcatalog`](https://github.com/tektoncd/catalog)
+tasks that is compatible with Tekton v0.7.0 (`master`) and install the pre-release
+check Task from plumbing too:
+
+```bash
+# Apply the Tasks we are using from the catalog
 kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/lint.yaml
 kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/build.yaml
 kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/tests.yaml
+kubectl apply -f https://raw.githubusercontent.com/tektoncd/plumbing/master/tekton/prerelease_checks.yaml
 ```
 
-TODO(#922) & TODO(#860): Add the Pipeline and hook it up with Prow, for now all
-we have are `Tasks` which we can invoke individually by creating
-[`TaskRuns`](https://github.com/tektoncd/pipeline/blob/master/docs/taskruns.md)
-and
-[`PipelineResources`](https://github.com/tektoncd/pipeline/blob/master/docs/resources.md).
+Apply the tasks from the `pipeline` repo:
+```bash
+# Apply the Tasks and Pipelines we use from this repo
+kubectl apply -f tekton/ci-images.yaml
+kubectl apply -f tekton/publish.yaml
+kubectl apply -f tekton/publish-nightly.yaml
+kubectl apply -f tekton/release-pipeline.yaml
+kubectl apply -f tekton/release-pipeline-nightly.yaml
 
-## Release Pipeline
-
-The release pipeline uses the
-[`golang`](https://github.com/tektoncd/catalog/tree/master/golang)
-Tasks from the
-[`tektoncd/catalog`](https://github.com/tektoncd/catalog). To add them
-to your cluster:
-
-```
-kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/lint.yaml
-kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/build.yaml
-kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/tests.yaml
+# Apply the resources - note that when manually releasing you'll re-apply these
+kubectl apply -f tekton/resources.yaml
 ```
 
-The *local* `Tasks` which make up our release `Pipeline` are:
+`Tasks` from this repo are:
 
 - [`ci-images.yaml`](ci-images.yaml) - This `Task` uses
   [`kaniko`](https://github.com/GoogleContainerTools/kaniko) to build and
@@ -69,91 +246,29 @@ The *local* `Tasks` which make up our release `Pipeline` are:
   [`tektoncd/catalog`](https://github.com/tektoncd/catalog) and
   [`publish.yaml`](publish.yaml)'s `Task`.
 
-The official releases [are performed from the `prow` cluster in the `tekton-releases`
-GCP project](https://github.com/tektoncd/plumbing#prow). To release you will want to:
+## Service account and secrets
 
-1. Install / update Tekton in the kubernetes cluster you'll be running against either via:
-
-  * [An official release](https://github.com/tektoncd/pipeline/blob/master/docs/install.md)
-  * [From `HEAD`](https://github.com/tektoncd/pipeline/blob/master/DEVELOPMENT.md#install-pipeline)
-
-  If this is your first time running in the cluster, you will need to give yourself admin permissions
-  in the cluster in order to deploy Tekton pipelines, e.g.:
-
-  ```bash
-  kubectl create clusterrolebinding cluster-admin-binding-someusername \
-    --clusterrole=cluster-admin \
-    --user=$(gcloud config get-value core/account)
-  ```
-
-2. [Run the Pipeline](#run-the-pipeline). Note that since we don't yet have an actual Pipeline (#531)
-   we often just [create the release](#creating-a-new-release) and we skip the bit where we publish
-   the ci images (which rarely change anyway). Hashtag lazy manual anti-pattern.
-
-3. Create the new tag and release in GitHub
-   ([see one of way of doing that here](https://github.com/tektoncd/pipeline/issues/530#issuecomment-477409459)).
-   _TODO(#530): Automate as much of this as possible with Tekton._
-
-4. Add an entry to [the README](../README.md) at `HEAD` for docs and examples for the new release
-   ([README.md#read-the-docs](README.md#read-the-docs)).
-
-5. Update the new release in GitHub with the same links to the docs and examples, see
-   [v0.1.0](https://github.com/tektoncd/pipeline/releases/tag/v0.1.0) for example.
-
-### Run the Pipeline
-
-TODO(#531): Add the Pipeline, for now all we have are `Tasks` which we can
-invoke individually by creating
-[`TaskRuns`](https://github.com/tektoncd/pipeline/blob/master/docs/taskruns.md)
+In order to release, these Pipelines use the `release-right-meow` service account,
+which uses `release-secret` and has
+[`Storage Admin`](https://cloud.google.com/container-registry/docs/access-control)
+access to
+[`tekton-releases`]((https://github.com/tektoncd/plumbing/blob/master/gcp.md))
 and
-[`PipelineResources`](https://github.com/tektoncd/pipeline/blob/master/docs/resources.md).
+[`tekton-releases-nightly`]((https://github.com/tektoncd/plumbing/blob/master/gcp.md)).
 
-TODO(#569): Normally we'd use the image `PipelineResources` to control which
-image registry the images are pushed to. However since we have so many images,
-all going to the same registry, we are cheating and using a parameter for the
-image registry instead.
-
-- [`ci-images-run.yaml`](ci-images-run.yaml) - This example `TaskRun` and
-  `PipelineResources` demonstrate how to invoke `ci-images.yaml` (see
-  [Build and push the CI image](#creating-ci-image))
-
-- [`publish-run.yaml`](publish-run.yaml) - This example `TaskRun` and
-  `PipelineResources` demonstrate how to invoke `publish.yaml` (see
-  [Creating a new release](#creating-a-new-release))
-  
-- You can use [`tkn`](https://github.com/tektoncd/cli) to run the [release
-  pipeline](./release-pipeline.yaml) (see [Creating a new
-  release](#creating-a-new-release))
-
-#### Setting up your credentials
-
-Setup the required credentials for the `release-right-meow` service account, either:
-
-- For
-  [the GCP service account `release-right-meow@tekton-releases.iam.gserviceaccount.com`](#production-service-account)
-  which has the proper authorization to release the images and yamls in
-  [our `tekton-releases` GCP project](https://github.com/tektoncd/plumbing#prow)
-- For
-  [your own GCP service account](https://cloud.google.com/iam/docs/creating-managing-service-accounts)
-  if running against your own infrastructure
+After creating these service accounts in GCP, the kubernetes service account and
+secret were created with:
 
 ```bash
 KEY_FILE=release.json
 GENERIC_SECRET=release-secret
 ACCOUNT=release-right-meow
-# Replace with your own service account if using your own infra
-GCP_ACCOUNT="release-right-meow@tekton-releases.iam.gserviceaccount.com"
-```
 
-The value of GCP_ACCOUNT for your own infrastructure is `[SA-NAME]@[PROJECT-ID].iam.gserviceaccount.com`.
-`[SA-NAME]` is the name of the service account, and `[PROJECT-ID]` is the ID of
-your Google Cloud Platform project. Make sure you have both of them created for your own
-account, before proceeding with the following commands. Please refer to [Google Projects](https://cloud.google.com/resource-manager/docs/creating-managing-projects)
-to create the project, and [Google Service Accounts](https://cloud.google.com/iam/docs/creating-managing-service-accounts) to create the service account, if necessary.
+# Connected to the `prow` in the `tekton-releases` GCP project
+GCP_ACCOUNT="$ACCOUNT@tekton-releases.iam.gserviceaccount.com"
 
-```bash
-# 1. Create a private key for the service account, which you can use
-gcloud iam service-accounts keys create --iam-account $GCP_ACCOUNT $KEY_FILE
+# 1. Create a private key for the service account
+gcloud iam service-accounts keys create $KEY_FILE --iam-account $GCP_ACCOUNT
 
 # 2. Create kubernetes secret, which we will use via a service account and directly mounting
 kubectl create secret generic $GENERIC_SECRET --from-file=./$KEY_FILE
@@ -164,206 +279,12 @@ kubectl patch serviceaccount $ACCOUNT \
   -p "{\"secrets\": [{\"name\": \"$GENERIC_SECRET\"}]}"
 ```
 
-#### Creating CI image
-
-After the credentials are configured, you can run the following commands to
-build and push the CI image upstream.
-
-```bash
-kubectl apply -f tekton/ci-images.yaml
-kubectl apply -f tekton/ci-images-run.yaml
-```
-
-#### Creating a new release
-
-Currently, all the official release processes are conducted under [Google Kubernetes Engine](https://cloud.google.com/kubernetes-engine/docs/).
-Please follow the tutorial [here](https://cloud.google.com/kubernetes-engine/docs/quickstart) to launch your own infrastructure, if needed.
-
-The `TaskRun` will use
-
-- The kubernetes service account [`release-right-meow`](account.yaml), which by
-  default has no associated secrets
-- A secret called `release-secret`
-
-It needs to run with a service account in the target GCP project with
-[`Storage Admin`](https://cloud.google.com/container-registry/docs/access-control)
-access), such as [the production service account](#production-service-account).
-
-To run the `publish-tekton-pipelines` `Task` and create a release:
-
-1. Pick the revision you want to release and update the
-   [`resources.yaml`](./resources.yaml) file to add a
-   `PipelineResoruce` for it, e.g.:
-
-   ```yaml
-   apiVersion: tekton.dev/v1alpha1
-   kind: PipelineResource
-   metadata:
-     name: tekton-pipelines-vX-Y-Z
-   spec:
-     type: git
-     params:
-     - name: url
-       value: https://github.com/tektoncd/pipeline # REPLACE with your own fork
-     - name: revision
-       value: vX.Y.Z-invalid-tags-boouuhhh # REPLACE with your own commit
-   ```
-   
-   Also, validate that the `tektoncd-bucket` points to the correct
-   bucket if you are running the release on your own infrastructure.
-  
-   ```yaml
-   - name: location
-     value: gs://tekton-releases # REPLACE with your own bucket
-   ```
-
-2. To run an official release [using the production cluster](https://github.com/tektoncd/plumbing#prow):
-
-  ```bash
-  gcloud container clusters get-credentials prow --zone us-central1-a --project tekton-releases
-  ```
-
-3. To run against your own infrastructure (if you are running
-   [in the production cluster](https://github.com/tektoncd/plumbing#prow) the default account should
-   already have these creds, this is just a bonus - plus `release-right-meow` might already exist in the
-   cluster!), also setup the required credentials for the `release-right-meow` service account, either:
-
-   - For
-     [the GCP service account `release-right-meow@tekton-releases.iam.gserviceaccount.com`](#production-service-account)
-     which has the proper authorization to release the images and yamls in
-     [our `tekton-releases` GCP project](https://github.com/tektoncd/plumbing#prow)
-   - For
-     [your own GCP service account](https://cloud.google.com/iam/docs/creating-managing-service-accounts)
-     if running against your own infrastructure
-
-   ```bash
-   KEY_FILE=release.json
-   GENERIC_SECRET=release-secret
-   ACCOUNT=release-right-meow
-   # Replace with your own service account if using your own infra
-   GCP_ACCOUNT="release-right-meow@tekton-releases.iam.gserviceaccount.com"
-
-    # 1. Create a private key for the service account, which you can use
-    gcloud iam service-accounts keys create --iam-account $GCP_ACCOUNT $KEY_FILE
-
-    # 2. Create kubernetes secret, which we will use via a service account and directly mounting
-    kubectl create secret generic $GENERIC_SECRET --from-file=./$KEY_FILE
-
-    # 3. Add the docker secret to the service account
-    kubectl apply -f tekton/account.yaml
-    kubectl patch serviceaccount $ACCOUNT \
-     -p "{\"secrets\": [{\"name\": \"$GENERIC_SECRET\"}]}"
-   ```
-
-4. To run the release you can either create a `PipelineRun` using
-   [`tkn`](https://github.com/tektoncd/cli), or using a yaml file.
-
-	You will need to set the following parameters:
-	- `versionTag`: to set the tag to use for published images
-	
-	  **TODO(#983) Be careful! if you use a tag that has already been released, you
-	  can overwrite a previous release!**
-	  
-	- `imageRegistry`: the default value points to
-      `gcr.io/tekton-releases`, to run against your own infrastructure
-      (not needed for actual releases) set it to your registry.
-
-6. Run the `release-pipeline`:
-
-   ```shell
-   # If you are running in a cluster you've run this in previously,
-   # delete the previous run and resources
-
-   # Apply golang tasks from the catalog
-   kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/lint.yaml
-   kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/build.yaml
-   kubectl apply -f https://raw.githubusercontent.com/tektoncd/catalog/master/golang/tests.yaml
-
-   # Apply the publish Task
-   kubectl apply -f tekton/publish.yaml
-
-   # Create the resoruces
-   kubectl apply -f tekton/resources.yaml
-   ```
-
-   If you are using [`tkn`](https://github.com/tektoncd/cli), you can
-   run the following command.
-	
-   ```shell
-   # Do not forget to change those environment variables !
-   export VERSION_TAG=v0.X.Y
-
-   tkn pipeline start \
-		--param=versionTag=${VERSION_TAG} \
-		--serviceaccount=release-right-meow \
-		--resource=source-repo=tekton-pipelines-git \
-		--resource=bucket=tekton-bucket \
-		--resource=builtBaseImage=base-image \
-		--resource=builtEntrypointImage=entrypoint-image \
-		--resource=builtKubeconfigWriterImage=kubeconfigwriter-image \
-		--resource=builtCredsInitImage=creds-init-image \
-		--resource=builtGitInitImage=git-init-image \
-		--resource=builtNopImage=nop-image \
-		--resource=builtBashImage=bash-image \
-		--resource=builtGsutilImage=gsutil-image \
-		--resource=builtControllerImage=controller-image \
-		--resource=builtWebhookImage=webhook-image \
-		--resource=builtDigestExporterImage=digest-exporter-image \
-		--resource=builtPullRequestInitImage=pull-request-init-image \
-		pipeline-release
-   ```
-	
-   If you don't want to use `tkn`, you can use
-  [`release-pipeline-run.yaml`](./release-pipeline-run.yaml)'s
-  `PipelineRun`. **Do not forget to update the `params` and the
-  `source-repo` resource**.  
-
-### Authentication
-
-Users executing the publish task must be able to:
-
-- Push to the image registry (production registry is `gcr.io/tekton-releases`)
-- Write to the GCS bucket (production bucket is `gs://tekton-releases`)
-
-TODO: To be able to publish images via `kaniko` or `ko`, you must be able to
-push to your image registry. At the moment, the publish `Task` will try to use
-your default service account in the namespace where you create the `TaskRun`. If
-that default service account is able to push to your image registry, you are
-good to go. Otherwise, you need to use
-[a secret annotated with your docker registry credentials](https://github.com/tektoncd/pipeline/blob/master/docs/auth.md#basic-authentication-docker).
-
-#### Production credentials
-
-[Members of the Tekton governing board](https://github.com/tektoncd/community/blob/master/governance.md)
-[have access to the underlying resources](https://github.com/tektoncd/community/blob/master/governance.md#permissions-and-access).
-
-Users who need access to our production registry (`gcr.io/tekton-releases`) and
-production GCS bucket (`gs://tekton-releases`) should ping
-[a member of the governing board](https://github.com/tektoncd/community/blob/master/governance.md)
-to request access to
-[the production service account](#production-service-account).
-
-##### Production service account
-
-The GCP service account for creating release is
-`release-right-meow@tekton-releases.iam.gserviceaccount.com`. This account has
-the role
-[`Storage Admin`](https://cloud.google.com/container-registry/docs/access-control)
-in order to be able to read and write buckets and images.
-
-## Supporting scripts
+## Supporting scripts and images
 
 Some supporting scripts have been written using Python 2.7:
 
 - [koparse](./koparse) - Contains logic for parsing `release.yaml` files created
   by `ko`
-
-## Supporting images
-
-TODO(#639) Ensure we are using the images that are published by the `Pipeline`
-itself.
-
-These images are built and published to be used by the release Pipeline itself.
 
 ### ko image
 

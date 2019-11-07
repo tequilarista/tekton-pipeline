@@ -22,6 +22,12 @@ import (
 	"knative.dev/pkg/apis"
 )
 
+var (
+	// Check that Task may be validated and defaulted.
+	_ apis.Validatable = (*Task)(nil)
+	_ apis.Defaultable = (*Task)(nil)
+)
+
 func (t *Task) TaskSpec() TaskSpec {
 	return t.Spec
 }
@@ -66,16 +72,12 @@ type TaskSpec struct {
 // provided by Container.
 type Step struct {
 	corev1.Container
+
+	// Script is the contents of an executable file to execute.
+	//
+	// If Script is not empty, the Step cannot have an Command or Args.
+	Script string `json:"script,omitempty"`
 }
-
-// Check that Task may be validated and defaulted.
-var _ apis.Validatable = (*Task)(nil)
-var _ apis.Defaultable = (*Task)(nil)
-
-const (
-	// TaskOutputImageDefaultDir is the default directory for output image resource,
-	TaskOutputImageDefaultDir = "/builder/home/image-outputs"
-)
 
 // +genclient
 // +genclient:noStatus
@@ -117,9 +119,7 @@ type Inputs struct {
 // path to the volume mounted containing this Resource as an input (e.g.
 // an input Resource named `workspace` will be mounted at `/workspace`).
 type TaskResource struct {
-	ResourceDeclaration
-	// +optional
-	OutputImageDir string `json:"outputImageDir,omitempty"`
+	ResourceDeclaration `json:",inline"`
 }
 
 // Outputs allow a task to declare what data the Build/Task will be producing,

@@ -1,0 +1,16 @@
+apiVersion: tekton.dev/v1alpha1
+kind: TaskRun
+metadata:
+  generateName: custom-env-
+spec:
+  taskSpec:
+    steps:
+    - name: test
+      image: ubuntu
+      command: ['bash']
+      args:
+      - '-c'
+      - '[[ $MY_VAR1 == foo ]]'
+      env:
+      - name: MY_VAR1
+        value: foo
